@@ -28,7 +28,7 @@ Grasper::~Grasper(){
 
 /*int main( int argc, char **argv ) {
   assert(argc > 1);
-  
+
   Hubo_Control hubo;
   Eigen::VectorXd dofs(5); dofs << RF1, RF2, RF3, RF4, RF5;
   Eigen::VectorXd vals(5);
@@ -46,10 +46,10 @@ Grasper::~Grasper(){
   trans(1,0) = 0.371466; trans(1,1) =  0.928395;  trans(1,2) = -0.0098302; trans(1,3) = -0.169458;
   trans(2,0) = -0.0837579; trans(2,1) = 0.0440537; trans(2,2) =  0.995512; trans(2,3) = -0.142446;
   trans(3,0) = 0; trans(3,1) = 0; trans(3,2) = 0; trans(3,3) = 1;
-  
+
   Eigen::Isometry3d cTrans;
   Vector6d armAngles;
-  Vector6d current;  
+  Vector6d current;
   Eigen::VectorXd desiredLoc(3); desiredLoc << trans(0,3), trans(1,3), trans(2,3);
   Eigen::VectorXd loc(3);
   bool grasping = false;
@@ -58,7 +58,7 @@ Grasper::~Grasper(){
   int configs = countFileLines(argv[1]);
   vector <Vector6d, Eigen::aligned_allocator<Vector6d> > trajectory(configs);
   loadTrajectoryInfo(argv[1], trajectory, configs);
-  
+
   // first open hand
   openCloseHand(torques, dofs, hubo, OPEN_HAND);
   hubo.sendControls();
@@ -69,10 +69,10 @@ Grasper::~Grasper(){
 
     hubo.getRightArmAngles(current);
     hubo.huboArmIK(armAngles, trans, current, RIGHT);
-    
+
     hubo.huboArmFK(cTrans, current, RIGHT);
     loc = cTrans.translation();
-    
+
     //only do processing if new info has arrived
     if(dt > 0){
       // compute current encoded values
@@ -83,10 +83,10 @@ Grasper::~Grasper(){
       step = (step >= configs) ? 0 : step;
 
       hubo.setArmAngles(RIGHT, trajectory[step]);
-      
+
       // once object has been reached, close hand; calculate torques as object is held
       if(step > 29 || grasping){//((desiredLoc - loc).norm() <= tolerance || grasping){
-	// compute grasp torques                                                                                                       
+	// compute grasp torques
 	torques = proportionalGraspController(k, vals, desiredGrasp);
 	cout << torques.transpose() << endl;
 
@@ -98,7 +98,7 @@ Grasper::~Grasper(){
   }
   }*/
 
-void Grasper::getFingersEncValues(Hubo_Control &hubo, Eigen::VectorXd &dof, Eigen::VectorXd& values){  
+void Grasper::getFingersEncValues(Hubo_Control &hubo, Eigen::VectorXd &dof, Eigen::VectorXd& values){
   for(int i = 0; i < dof.size(); i++)
      values(i) = hubo.getJointAngleState(dof(i));
 }
