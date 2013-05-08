@@ -5,30 +5,13 @@ using namespace std;
 
 int main(int argc, char** argv) {
     Hubo_Control hubo;
-    Grasper hubo_grasp;
-
-    // Dofs of Right hand
-    Eigen::VectorXd handDofs(5);
-    handDofs << RF1, RF2, RF3, RF4, RF5;
-    Eigen::VectorXd torques(5);
-    Eigen::VectorXd vals(5);
-
-    // Desired encoder values for a firm grasp
-    Eigen::VectorXd desiredGrasp(5); desiredGrasp << -0.39, -0.66, -0.86, -0.39, -0.66;
-
-    // 4, 0, 9 - grasping point in bottle's frame
-    Eigen::Vector3d graspingPoint, trueGraspingPoint;
-    graspingPoint << 0.04, 0.0, 0.09;
-    Vector6d current, target;
-
+    // Initialize grasp handler with fingers indices, objectGCP, tolerance and gain
+    Eigen::VectorXd dofs(5); dofs << RF1, RF2, RF3, RF4, RF5;
+    Grasper hubo_grasp(dofs, 0.1, 3);
+    
     Eigen::Isometry3d objectTrans = Eigen::Isometry3d::Identity();
-    Eigen::Isometry3d trans = Eigen::Isometry3d::Identity();
-    Eigen::Isometry3d endffTrans;
 
-    bool grasping = false;
-    double tolerance = 0.01;
-
-    double k, dt, ptime, currentAngle;
+    double dt, ptime, currentAngle;
     manipulation_instruction_t cmd;
 
     // Setup ach for vision_computer command
@@ -45,15 +28,11 @@ int main(int argc, char** argv) {
         ach_flush(&manip_chan);
     }
 
-    // first open hand & rotate neck
-    hubo_grasp.openCloseHand(torques, handDofs, hubo, true);
-    hubo.sendControls();
-
     while (!daemon_sig_quit) {
         hubo.update();
         dt = hubo.getTime() - ptime;
         ptime = hubo.getTime();
-
+        
         if (dt > 0) {
             r = ACH_OK;
             size_t fs;
@@ -131,52 +110,13 @@ int main(int argc, char** argv) {
                 //hubo.setArmAngles(RIGHT, qRTarget, false);
             }
             else if(cmd.controlMode == OBJECT_POSE){
-                cout << "Received OBJECT_POSE !" << endl;
+                ECHO("Received OBJECT_POSE !");
+                // get object transform into matrix format
                 objectTrans.translate(Eigen::Vector3d(cmd.targetPoseRight.x, cmd.targetPoseRight.y, cmd.targetPoseRight.z));
                 objectTrans.rotate(Eigen::Quaterniond(cmd.targetPoseRight.w, cmd.targetPoseRight.i, cmd.targetPoseRight.j, cmd.targetPoseRight.k));
-
-                // compute grasping point in Hubo's frame
-                trueGraspingPoint = objectTrans * graspingPoint;
-                cout << "grasping point: " << trueGraspingPoint.transpose() << endl;
-
-                // translate objectTrans by grasping point in robot's frame
-                objectTrans.translate(Eigen::Vector3d(trueGraspingPoint(0), trueGraspingPoint(1), trueGraspingPoint(2)));
-               
-                while (true) {
-                    hubo.update();
-                    
-                    // get current joint config
-                    hubo.getArmAngles(RIGHT, current);
-                    
-                    cout << "Joint angles: " << current.transpose() << endl;
-                    
-                    // get joing angles for target grasp
-                    hubo.huboArmIK(target, objectTrans, current, RIGHT);
-                    
-                     // set arm to desired joint angles
-                    hubo.setArmAngles(RIGHT, target);
-                    
-                    // compute current end-effector location
-                    hubo.huboArmFK(endffTrans, current, RIGHT);
-                    
-                    // print norm
-                    cout << "norm: " << (trueGraspingPoint - endffTrans.translation()).norm() << endl;
-                    cout << trueGraspingPoint.transpose() << endl;
-                    cout << endffTrans.translation().transpose() << endl;
-                    
-                    // compute current encoded values
-                    hubo_grasp.getFingersEncValues(hubo, handDofs, vals);
-                    
-                    if ((trueGraspingPoint - endffTrans.translation()).norm() <= tolerance || grasping) {
-                        cout << "Object reached: Grasping!" << endl;
-                        grasping = true;
-                        // compute grasp torques
-                        torques = hubo_grasp.proportionalGraspController(k, vals, desiredGrasp);
-                        cout << torques.transpose() << endl;
-                        hubo_grasp.openCloseHand(torques, handDofs, hubo, false);
-                    }
-                    hubo.sendControls();
-                }   
+                
+                // try grasping the target object at defined objectGCP -- OBJECT DEPENDENT!
+                hubo_grasp.tryGrasping(hubo, objectTrans, Eigen::Vector3d(4,0,9), RIGHT);
             }
             else if(cmd.controlMode == HOME_JOINTS){
                 for(int i = 0; i <= RWP; i++){
@@ -193,6 +133,5 @@ int main(int argc, char** argv) {
             }
             hubo.sendControls();
         }
-        //usleep(100);
     }
 }

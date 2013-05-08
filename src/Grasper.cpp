@@ -1,155 +1,152 @@
+/*
+ * Copyright (c) 2013, Georgia Tech Research Corporation
+ * 
+ * Humanoid Robotics Lab      Georgia Institute of Technology
+ * Director: Mike Stilman     http://www.golems.org
+ *
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ *
+ *     * Redistributions of source code must retain the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer.
+ *     * Redistributions in binary form must reproduce the above
+ *       copyright notice, this list of conditions and the following
+ *       disclaimer in the documentation and/or other materials
+ *       provided with the distribution.
+ *     * Neither the name of the Georgia Tech Research Corporation nor
+ *       the names of its contributors may be used to endorse or
+ *       promote products derived from this software without specific
+ *       prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY GEORGIA TECH RESEARCH CORPORATION ''AS
+ * IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+ * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS
+ * FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL GEORGIA
+ * TECH RESEARCH CORPORATION BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+ * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+ * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT,
+ * STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED
+ * OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+/** @file Grasper.cpp
+ *  @author Juan C. Garcia
+ */
 #include "Grasper.h"
-
-#define OPEN_HAND true
-#define CLOSE_HAND false
-
 using namespace std;
 
-/// Pre-calculated finger joint limits to avoid self-destructing collision!
-/*------------------------
--0.398068
--0.660379
--0.864015
--0.398068
--0.660379
---------------------------*/
-/// Pre-calculated transformation matrix for target location; table with foam
-/*
-0.924661  -0.368975  0.0941248   0.421227
-  0.371466   0.928395 -0.0098302  -0.169458
--0.0837579  0.0440537   0.995512  -0.142446
-0          0          0          1*/
-
-Grasper::Grasper(){
+Grasper::Grasper(Eigen::VectorXd dofs, double t, double g) {
+    desiredEncoderValues.resize(5);
+    desiredEncoderValues << -0.3, -0.6, -0.8, -0.4, -0.6;
+    handDofs = dofs;
+    tolerance = t; 
+    gain = g;
+    graspingNow = false;
 }
 
-Grasper::~Grasper(){
-}
+Grasper::~Grasper() {}
 
-/*int main( int argc, char **argv ) {
-  assert(argc > 1);
+void Grasper::tryGrasping(Hubo_Control &hubo, Eigen::Isometry3d &objectTrans, Eigen::Vector3d objectGCP, int arm) {
+    // compute grasping point in Hubo's frame
+    robotGCP = objectTrans * objectGCP;
+    PRINT(robotGCP.transpose()); 
 
-  Hubo_Control hubo;
-  Eigen::VectorXd dofs(5); dofs << RF1, RF2, RF3, RF4, RF5;
-  Eigen::VectorXd vals(5);
-  Eigen::VectorXd torques(5);
-  Eigen::VectorXd desiredGrasp(5); desiredGrasp << -0.39, -0.66, -0.86, -0.39, -0.66;
-  double sum;
+    // translate objectTrans by grasping point in robot's frame
+    objectTrans.translate(Eigen::Vector3d(robotGCP(0), robotGCP(1), robotGCP(2)));
+    while (true) {
+        hubo.update();
 
-  double ptime, dt;
-  int step;
-  double k = 6;
-  double tolerance = 0.01;
-  // transformation matrix for reaching table with foam
-  Eigen::Isometry3d trans;
-  trans(0,0) = 0.924661; trans(0,1) = -0.368975;  trans(0,2) = 0.0941248; trans(0,3) = 0.421227;
-  trans(1,0) = 0.371466; trans(1,1) =  0.928395;  trans(1,2) = -0.0098302; trans(1,3) = -0.169458;
-  trans(2,0) = -0.0837579; trans(2,1) = 0.0440537; trans(2,2) =  0.995512; trans(2,3) = -0.142446;
-  trans(3,0) = 0; trans(3,1) = 0; trans(3,2) = 0; trans(3,3) = 1;
+        // get current joint config
+        hubo.getArmAngles(RIGHT, currentArmConfig);
+        PRINT(currentArmConfig.transpose());
+        
+        // compute joing angles for target grasp & set arm to such config
+        bool notReachable = hubo.huboArmIK(targetArmConfig, objectTrans, currentArmConfig, RIGHT);
+        hubo.setArmAngles(RIGHT, targetArmConfig);
+        PRINT(notReachable);
+        
+        // compute current end-effector location & compute norms to determine if target has been reached
+        hubo.huboArmFK(currentEndEffectorTrans, currentArmConfig, RIGHT);
+        PRINT((robotGCP - currentEndEffectorTrans.translation()).norm());         
 
-  Eigen::Isometry3d cTrans;
-  Vector6d armAngles;
-  Vector6d current;
-  Eigen::VectorXd desiredLoc(3); desiredLoc << trans(0,3), trans(1,3), trans(2,3);
-  Eigen::VectorXd loc(3);
-  bool grasping = false;
-
-  // load trajectory
-  int configs = countFileLines(argv[1]);
-  vector <Vector6d, Eigen::aligned_allocator<Vector6d> > trajectory(configs);
-  loadTrajectoryInfo(argv[1], trajectory, configs);
-
-  // first open hand
-  openCloseHand(torques, dofs, hubo, OPEN_HAND);
-  hubo.sendControls();
-
-  while(!daemon_sig_quit){
-    hubo.update();
-    dt = hubo.getTime() - ptime;
-
-    hubo.getRightArmAngles(current);
-    hubo.huboArmIK(armAngles, trans, current, RIGHT);
-
-    hubo.huboArmFK(cTrans, current, RIGHT);
-    loc = cTrans.translation();
-
-    //only do processing if new info has arrived
-    if(dt > 0){
-      // compute current encoded values
-      getFingersEncValues(hubo, dofs, vals);
-
-      // go to next point in trajectory if reached current
-      step = ((current - trajectory[step]).norm() <= tolerance) ? step+1 : step;
-      step = (step >= configs) ? 0 : step;
-
-      hubo.setArmAngles(RIGHT, trajectory[step]);
-
-      // once object has been reached, close hand; calculate torques as object is held
-      if(step > 29 || grasping){//((desiredLoc - loc).norm() <= tolerance || grasping){
-	// compute grasp torques
-	torques = proportionalGraspController(k, vals, desiredGrasp);
-	cout << torques.transpose() << endl;
-
-	grasping = true;
-	openCloseHand(torques, dofs, hubo, CLOSE_HAND);
-      }
-      hubo.sendControls();
+        /* Hubo will compute and apply torques to the fingers (i.e. close hand) if any of the following 3 cases are true: 
+         * (1) IK failed to find a solution, so just give it a try!
+         * (2) The object has already been grasped, keep applying torques!
+         * (3) The object has been reached through IK, perform initial grasp */
+        fingerEncoderValues.resize(5);
+        this->getFingersEncValues(hubo, handDofs, fingerEncoderValues);
+        if (notReachable || graspingNow || ((robotGCP - currentEndEffectorTrans.translation()).norm() <= tolerance)) {
+            ECHO("Object reached: Grasping now... ");
+            graspingNow = true;
+            
+            // compute grasp torques & apply them
+            torques = this->proportionalGraspController(gain, fingerEncoderValues);
+            PRINT(torques);
+            this->openCloseHand(torques, handDofs, hubo, false);
+        }
+        hubo.sendControls();
     }
-  }
-  }*/
-
-void Grasper::getFingersEncValues(Hubo_Control &hubo, Eigen::VectorXd &dof, Eigen::VectorXd& values){
-  for(int i = 0; i < dof.size(); i++)
-     values(i) = hubo.getJointAngleState(dof(i));
 }
 
-Eigen::VectorXd Grasper::proportionalGraspController(double gain, Eigen::VectorXd &vals, Eigen::VectorXd desired){
-  return -gain*(desired - vals);
+void Grasper::getFingersEncValues(Hubo_Control &hubo, Eigen::VectorXd &dof, Eigen::VectorXd& values) {
+    for (int i = 0; i < dof.size(); i++)
+        values(i) = hubo.getJointAngleState(dof(i));
 }
 
-void Grasper::openCloseHand(Eigen::VectorXd &torques, Eigen::VectorXd &dofs, Hubo_Control &hubo, bool action){
-  for(int i=0; i < dofs.size(); i++){
-    // set torques to -0.6 if action = OPEN_HAND = true
-    torques(i) = (action) ? -0.6: torques(i);
-    // apply limits before sending values
-    torques(i) = (torques(i) > 1) ? 1 : (torques(i) < -1) ? -1 : torques(i);
-    hubo.passJointAngle(dofs(i), torques(i));
-  }
+Eigen::VectorXd Grasper::proportionalGraspController(double gain, Eigen::VectorXd &vals) {
+    return -gain * (desiredEncoderValues - vals);
 }
 
-int Grasper::countFileLines(const char* filename){
-  ifstream file(filename);
-  int count = 0;
-  string line;
-  if(file.is_open()){
-    while(!file.eof()){
-      getline(file, line, '\n');
-      count++;
+void Grasper::openCloseHand(Eigen::VectorXd &torques, Eigen::VectorXd &dofs, Hubo_Control &hubo, bool action) {
+    for (int i = 0; i < dofs.size(); i++) {
+        // set torques to -0.6 if action = OPEN_HAND = true
+        torques(i) = (action) ? -0.6 : torques(i);
+        // apply limits before sending values
+        torques(i) = (torques(i) > 1) ? 1 : (torques(i) < -1) ? -1 : torques(i);
+
+        hubo.passJointAngle(dofs(i), torques(i));
     }
-  }
-  file.close();
-  return count;
 }
 
-void Grasper::loadTrajectoryInfo(const char* filename, vector<Vector6d, Eigen::aligned_allocator<Vector6d> > &trajectory, int line_count){
-  ifstream trajectoryFile(filename);
-  string jointValues;
-  int i = 0;
-  int ret = 0;
-
-  //cout << line_count << endl;
-  if(trajectoryFile.is_open()){
-    while( i+1 < line_count){
-      getline(trajectoryFile, jointValues);
-      ret = sscanf(jointValues.c_str(), "%lf %lf %lf %lf %lf %lf", &trajectory[i][0], &trajectory[i][1], &trajectory[i][2], &trajectory[i][3], &trajectory[i][4], &trajectory[i][5]);
-      //cout << jointValues << endl;
-      cout << trajectory[i][0] << " " << trajectory[i][1] << " " << trajectory[i][2] << " " << trajectory[i][3] << " " << trajectory[i][4] << " " << trajectory[i][5] << endl;
-      assert(ret == 6);
-      i++;
+int Grasper::countFileLines(const char* filename) {
+    ifstream file(filename);
+    int count = 0;
+    string line;
+    if (file.is_open()) {
+        while (!file.eof()) {
+            getline(file, line, '\n');
+            count++;
+        }
     }
-    trajectoryFile.close();
-  }
-  else{
-    cout << "Error opening trajectory file!" << endl;
-  }
+    file.close();
+    return count;
+}
+
+void Grasper::loadTrajectoryInfo(const char* filename, vector<Vector6d, Eigen::aligned_allocator<Vector6d> > &trajectory, int line_count) {
+    ifstream trajectoryFile(filename);
+    string jointValues;
+    int i = 0;
+    int ret = 0;
+
+    //cout << line_count << endl;
+    if (trajectoryFile.is_open()) {
+        while (i + 1 < line_count) {
+            getline(trajectoryFile, jointValues);
+            ret = sscanf(jointValues.c_str(), "%lf %lf %lf %lf %lf %lf", &trajectory[i][0], &trajectory[i][1], &trajectory[i][2], &trajectory[i][3], &trajectory[i][4], &trajectory[i][5]);
+            //cout << jointValues << endl;
+            cout << trajectory[i][0] << " " << trajectory[i][1] << " " << trajectory[i][2] << " " << trajectory[i][3] << " " << trajectory[i][4] << " " << trajectory[i][5] << endl;
+            assert(ret == 6);
+            i++;
+        }
+        trajectoryFile.close();
+    } else {
+        cout << "Error opening trajectory file!" << endl;
+    }
 }
