@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
                 objectTrans.rotate(Eigen::Quaterniond(cmd.targetPoseRight.w, cmd.targetPoseRight.i, cmd.targetPoseRight.j, cmd.targetPoseRight.k));
                 
                 // try grasping the target object at defined objectGCP -- OBJECT DEPENDENT!
-                hubo_grasp.tryGrasping(hubo, objectTrans, Eigen::Vector3d(4,0,9), RIGHT);
+                hubo_grasp.tryGrasping(hubo, objectTrans, Eigen::Vector3d(0.04,0,0.09), RIGHT);
             }
             else if(cmd.controlMode == HOME_JOINTS){
                 for(int i = 0; i <= RWP; i++){
